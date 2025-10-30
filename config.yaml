@@ -1,0 +1,31 @@
+video:
+  source: 0            # 0 = webcam; ou caminho de arquivo, ex: samples/pool1.mp4
+  display: true        # mostra janela com overlay
+  resize_width: 960    # redimensiona p/ acelerar; 0 para manter tamanho original
+
+model:
+  weights: yolov8n.pt  # pode usar yolov8s.pt se tiver GPU/CPU boa
+  conf: 0.5
+  iou: 0.45
+  device: cpu         # "cpu" ou "cuda" (auto tenta detectar)
+
+roi:
+  file: roi_pool.yaml  # salvo pelo roi_setup.py
+
+alarm:
+  enabled_start: true  # começa armado?
+  dwell_seconds: 1.5   # tempo mínimo na ROI antes de disparar
+  min_box_area: 7000   # ignora detecções pequenas (ajuste conforme a câmera)
+  cooldown_seconds: 8  # evita spam de eventos
+
+outputs:
+  http:
+    enabled: true
+    url: http://127.0.0.1:8000/event
+    timeout: 2
+  mqtt:
+    enabled: false
+    broker: 127.0.0.1
+    port: 1883
+    topic: pool/alert
+    qos: 1
