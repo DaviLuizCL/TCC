@@ -217,12 +217,26 @@ make run
 ---
 
 ## 📚 Créditos & Licenças
-- **YOLOv8 (Ultralytics)** — respeite a licença e cite no TCC.
-- Código deste repositório: uso acadêmico/didático.
 
----
+**Licença deste repositório**
+- **PoolGuard (este projeto)** — Licenciado sob **AGPL-3.0**. Uso acadêmico/didático; sem garantias. Veja o arquivo `LICENSE`.
+
+**Dependências e respectivas licenças**
+- **Ultralytics YOLOv8 (`ultralytics`)** — **AGPL-3.0** (© Ultralytics). Cite no TCC:  
+  JOCHER, G. et al. *Ultralytics YOLOv8*. Ultralytics, 2023–2025. Disponível em: https://github.com/ultralytics/ultralytics. Acesso em: 30 out. 2025.
+- **OpenCV** — **BSD-3-Clause**.
+- **FastAPI** — **MIT**.
+- **Pydantic** — **MIT**.
+- **NumPy** — **BSD-3-Clause**.
+- **Requests** — **Apache-2.0**.
+- **paho-mqtt** — **EPL-2.0**.
+- **PyYAML** — **MIT**.
+- **Uvicorn** — **BSD-3-Clause**.
+- (**Opcional/indireta**) **PyTorch** — **BSD-3-Clause**.
+
+> Observação: ao importar `ultralytics` (AGPL-3.0) diretamente, este projeto adota **AGPL-3.0** para manter a compatibilidade de licença.
 
 ## 👤 Autor / Contato
 Projeto desenvolvido para TCC por **Davi** (davilcl). 
 
-Se precisar, inclua prints de tela, amostras de eventos e métricas (FPS, TP/FP) nesta seção do repositório.
+
