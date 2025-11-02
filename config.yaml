@@ -1,31 +1,29 @@
 video:
-  source: 0            # 0 = webcam; ou caminho de arquivo, ex: samples/pool1.mp4
-  display: true        # mostra janela com overlay
-  resize_width: 960    # redimensiona p/ acelerar; 0 para manter tamanho original
+  source: 0
+  display: true
+  resize_width: 960
 
 model:
-  weights: yolov8n.pt  # pode usar yolov8s.pt se tiver GPU/CPU boa
+  weights: yolov8n.pt
   conf: 0.5
   iou: 0.45
-  device: cpu         # "cpu" ou "cuda" (auto tenta detectar)
+  device: cpu
 
 roi:
-  file: roi_pool.yaml  # salvo pelo roi_setup.py
+  file: roi_pool.yaml
 
 alarm:
-  enabled_start: true  # começa armado?
-  dwell_seconds: 1.5   # tempo mínimo na ROI antes de disparar
-  min_box_area: 7000   # ignora detecções pequenas (ajuste conforme a câmera)
-  cooldown_seconds: 8  # evita spam de eventos
+  enabled_start: true
+  dwell_seconds: 1.5
+  min_box_area: 7000
+  cooldown_seconds: 8
 
+# NOVO: saída por GPIO
 outputs:
-  http:
+  gpio:
     enabled: true
-    url: http://127.0.0.1:8000/event
-    timeout: 2
-  mqtt:
-    enabled: false
-    broker: 127.0.0.1
-    port: 1883
-    topic: pool/alert
-    qos: 1
+    pin: 17          # GPIO17 (pino físico 11) no esquema BCM
+    setup: BCM       # BCM ou BOARD
+    active_high: true
+    mode: pulse      # 'pulse' para pulso temporizado, 'latch' para travar em nível
+    pulse_ms: 500    # duração do pulso em milissegundos quando mode='pulse'
