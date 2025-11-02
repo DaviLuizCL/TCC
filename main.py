@@ -1,19 +1,16 @@
-import cv2, yaml, argparse, os
-import numpy as np
+# SPDX-License-Identifier: AGPL-3.0-or-later
+import cv2, yaml, argparse
 from detector import PersonDetector
 from utils import load_roi, center_of, DwellTimer, Cooldown, point_in_poly
-from alerting import AlertEvent, send_http, send_mqtt
-
+from alerting import GpioAlerter, GpioConfig
 
 def load_config(path: str):
     with open(path, 'r') as f:
         return yaml.safe_load(f)
 
-
 def inside_roi(bbox, roi_poly):
     c = center_of(bbox)
     return point_in_poly(c, roi_poly)
-
 
 def draw_overlay(frame, roi_poly, boxes, armed, triggered):
     overlay = frame.copy()
@@ -29,7 +26,6 @@ def draw_overlay(frame, roi_poly, boxes, armed, triggered):
     cv2.putText(overlay, txt, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 3)
     cv2.putText(overlay, txt, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     return overlay
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -61,9 +57,19 @@ def main():
     cooldown = Cooldown(cfg["alarm"]["cooldown_seconds"])
     min_box_area = int(cfg["alarm"]["min_box_area"])
 
-    # Saídas
-    http_cfg = cfg["outputs"]["http"]
-    mqtt_cfg = cfg["outputs"]["mqtt"]
+    # GPIO (novo)
+    gpio_cfg_dict = cfg.get("outputs", {}).get("gpio", {}) or {}
+    gpio_enabled = bool(gpio_cfg_dict.get("enabled", False))
+    gpio_alerter = None
+    if gpio_enabled:
+        gc = GpioConfig(
+            pin=int(gpio_cfg_dict.get("pin", 17)),
+            setup=str(gpio_cfg_dict.get("setup", "BCM")),
+            active_high=bool(gpio_cfg_dict.get("active_high", True)),
+            mode=str(gpio_cfg_dict.get("mode", "pulse")),
+            pulse_ms=int(gpio_cfg_dict.get("pulse_ms", 500)),
+        )
+        gpio_alerter = GpioAlerter(gc)
 
     resize_w = int(cfg["video"]["resize_width"])
     display = bool(cfg["video"]["display"])
@@ -78,11 +84,8 @@ def main():
             scale = resize_w / w
             frame = cv2.resize(frame, None, fx=scale, fy=scale)
             h, w = frame.shape[:2]
-            # OBS: defina a ROI na mesma resolução que você vai usar.
 
         detections = det.detect(frame)
-
-        # filtro por área
         detections = [d for d in detections if d["area"] >= min_box_area]
 
         any_in_roi = False
@@ -96,35 +99,17 @@ def main():
 
         triggered = False
 
-        # Condição de disparo
+        # Disparo do alerta via GPIO (apenas quando: armado, pessoa na ROI, cooldown ok, dwell atendido)
         if armed and any_in_roi and cooldown.ready():
             if dwell.update(True):
-                ev = AlertEvent(
-                    source=str(src),
-                    roi_name="pool",
-                    persons=len(boxes_in_roi),
-                    boxes=boxes_in_roi,
-                    frame_w=w,
-                    frame_h=h,
-                    reason="person_in_pool_roi",
-                )
-                try:
-                    if http_cfg["enabled"]:
-                        send_http(ev, http_cfg["url"], http_cfg.get("timeout", 2))
-                    if mqtt_cfg["enabled"]:
-                        send_mqtt(
-                            ev,
-                            mqtt_cfg["broker"],
-                            mqtt_cfg["port"],
-                            mqtt_cfg["topic"],
-                            mqtt_cfg.get("qos", 1),
-                        )
-                except Exception as e:
-                    print("Falha ao enviar evento:", e)
+                if gpio_enabled and gpio_alerter is not None:
+                    try:
+                        gpio_alerter.trigger()
+                    except Exception as e:
+                        print("[GPIO] Falha ao disparar sinal:", e)
                 cooldown.mark()
                 triggered = True
         else:
-            # Reseta o dwell quando as condições não estão satisfeitas
             dwell.update(False)
 
         if display:
@@ -136,10 +121,15 @@ def main():
             if key == ord("a"):
                 armed = not armed
                 print("ARMADO:", armed)
+            # tecla 'c' limpa latch se estiver usando modo 'latch'
+            if key == ord("c") and gpio_enabled and gpio_alerter is not None:
+                try:
+                    gpio_alerter.clear()
+                    print("[GPIO] LATCH limpo (nível inativo).")
+                except Exception as e:
+                    print("[GPIO] Falha ao limpar latch:", e)
 
     cap.release()
     cv2.destroyAllWindows()
-
-
 if __name__ == "__main__":
     main()
