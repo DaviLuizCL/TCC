@@ -18,12 +18,17 @@ alarm:
   min_box_area: 7000
   cooldown_seconds: 8
 
-# NOVO: saída por GPIO
 outputs:
   gpio:
     enabled: true
-    pin: 17          # GPIO17 (pino físico 11) no esquema BCM
-    setup: BCM       # BCM ou BOARD
+    pin: 17           # GPIO de ALERTA (BCM)
+    setup: BCM        # BCM ou BOARD
     active_high: true
-    mode: pulse      # 'pulse' para pulso temporizado, 'latch' para travar em nível
-    pulse_ms: 500    # duração do pulso em milissegundos quando mode='pulse'
+    mode: latch       # 'pulse' (pulso) ou 'latch' (fica ligado até limpar)
+    pulse_ms: 500     # usado apenas se mode='pulse'
+
+    # NOVO: entrada digital para limpar o latch (opcional)
+    clear_pin: 27         # GPIO de LIMPEZA (BCM). Comente/retire para não usar.
+    clear_active_high: true  # nível ativo do clear_pin (true = 1 limpa, false = 0 limpa)
+    clear_pull: PUD_DOWN     # PUD_UP | PUD_DOWN | NONE
+    clear_debounce_ms: 120   # antirruído por software

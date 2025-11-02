@@ -15,7 +15,12 @@ def inside_roi(bbox, roi_poly):
 def draw_overlay(frame, roi_poly, boxes, armed, triggered):
     overlay = frame.copy()
     # ROI
-    cv2.polylines(overlay, [roi_poly], True, (0, 255, 255), 2)
+    import numpy as np
+    if isinstance(roi_poly, list):
+        roi_np = np.array(roi_poly, dtype=np.int32)
+    else:
+        roi_np = roi_poly
+    cv2.polylines(overlay, [roi_np], True, (0, 255, 255), 2)
     # Caixas
     for b in boxes:
         (x1, y1, x2, y2) = b["bbox"]
@@ -57,8 +62,8 @@ def main():
     cooldown = Cooldown(cfg["alarm"]["cooldown_seconds"])
     min_box_area = int(cfg["alarm"]["min_box_area"])
 
-    # GPIO (novo)
-    gpio_cfg_dict = cfg.get("outputs", {}).get("gpio", {}) or {}
+    # GPIO
+    gpio_cfg_dict = (cfg.get("outputs", {}).get("gpio", {}) or {})
     gpio_enabled = bool(gpio_cfg_dict.get("enabled", False))
     gpio_alerter = None
     if gpio_enabled:
@@ -68,6 +73,10 @@ def main():
             active_high=bool(gpio_cfg_dict.get("active_high", True)),
             mode=str(gpio_cfg_dict.get("mode", "pulse")),
             pulse_ms=int(gpio_cfg_dict.get("pulse_ms", 500)),
+            clear_pin=(int(gpio_cfg_dict["clear_pin"]) if gpio_cfg_dict.get("clear_pin") is not None else None),
+            clear_active_high=bool(gpio_cfg_dict.get("clear_active_high", True)),
+            clear_pull=str(gpio_cfg_dict.get("clear_pull", "PUD_DOWN")),
+            clear_debounce_ms=int(gpio_cfg_dict.get("clear_debounce_ms", 120)),
         )
         gpio_alerter = GpioAlerter(gc)
 
@@ -99,7 +108,7 @@ def main():
 
         triggered = False
 
-        # Disparo do alerta via GPIO (apenas quando: armado, pessoa na ROI, cooldown ok, dwell atendido)
+        # Disparo do alerta via GPIO (quando: armado, pessoa na ROI, cooldown ok, dwell atendido)
         if armed and any_in_roi and cooldown.ready():
             if dwell.update(True):
                 if gpio_enabled and gpio_alerter is not None:
@@ -112,6 +121,15 @@ def main():
         else:
             dwell.update(False)
 
+        # LIMPEZA por pino de entrada (se configurado)
+        if gpio_enabled and gpio_alerter is not None:
+            try:
+                if gpio_alerter.check_clear_input():
+                    gpio_alerter.clear()
+                    print("[GPIO] LATCH limpo via pino de limpeza.")
+            except Exception as e:
+                print("[GPIO] Erro ao verificar pino de limpeza:", e)
+
         if display:
             vis = draw_overlay(frame, roi_poly, detections, armed, triggered)
             cv2.imshow("PoolGuard", vis)
@@ -121,15 +139,16 @@ def main():
             if key == ord("a"):
                 armed = not armed
                 print("ARMADO:", armed)
-            # tecla 'c' limpa latch se estiver usando modo 'latch'
+            # tecla 'c' limpa latch também
             if key == ord("c") and gpio_enabled and gpio_alerter is not None:
                 try:
                     gpio_alerter.clear()
-                    print("[GPIO] LATCH limpo (nível inativo).")
+                    print("[GPIO] LATCH limpo (nível inativo) por teclado.")
                 except Exception as e:
                     print("[GPIO] Falha ao limpar latch:", e)
 
     cap.release()
     cv2.destroyAllWindows()
+
 if __name__ == "__main__":
     main()
