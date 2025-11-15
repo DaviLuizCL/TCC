@@ -1,6 +1,6 @@
 # PoolGuard — Sistema de Prevenção de Afogamentos (TCC)
 
-MVP em Python que detecta **pessoas** na área da **piscina (ROI)** usando **YOLOv8 + OpenCV** e dispara **eventos JSON** via **HTTP** e/ou **MQTT**. Ideal para demonstração acadêmica e prototipagem.
+MVP em Python que detecta **pessoas** na área da **piscina (ROI)** usando **YOLOv8 + OpenCV** e dispara um **Sinal Digital** via pino GPIO
 
 > ⚠️ **Aviso**: Este software é um **apoio** tecnológico e **não substitui** a supervisão humana. Teste exaustivamente antes de uso real.
 
@@ -11,7 +11,7 @@ MVP em Python que detecta **pessoas** na área da **piscina (ROI)** usando **YOL
 - Definição de **ROI poligonal** (área da piscina) com o mouse.
 - **Armar/Desarmar** o sistema (tecla **A**).
 - Filtros anti-ruído: **dwell** (tempo mínimo na ROI) e **cooldown** (intervalo entre alertas).
-- **Envio de JSON** por **HTTP webhook** e/ou **MQTT** (rede local ou externa).
+- **Envio de Sinal Digital** por **Pino GPIO**.
 - Overlay com ROI, caixas e status (**ARMADO/ALERT**).
 
 ---
@@ -19,7 +19,7 @@ MVP em Python que detecta **pessoas** na área da **piscina (ROI)** usando **YOL
 ## 🧱 Arquitetura (alto nível)
 ```
 [Camera/Vídeo] -> OpenCV -> YOLOv8 (pessoa) -> filtro (conf/área) ->
--> verificador ROI -> dwell + cooldown -> evento -> [HTTP POST] / [MQTT publish]
+-> verificador ROI -> dwell + cooldown -> evento -> SINAL DIGITAL UP
 ```
 
 ---
@@ -31,9 +31,8 @@ seu_projeto/
 ├─ main.py                # loop principal
 ├─ roi_setup.py           # desenhar/salvar ROI
 ├─ detector.py            # wrapper YOLO (pessoa)
-├─ alerting.py            # schema + envio HTTP/MQTT
+├─ alerting.py            # schema + ligação do pino
 ├─ utils.py               # ROI, temporizadores, helpers
-├─ server_demo.py         # receptor HTTP (FastAPI)
 ├─ requirements.txt
 ├─ Makefile               # opcional (atalhos)
 └─ samples/               # vídeos de teste (opcional)
@@ -43,7 +42,7 @@ seu_projeto/
 
 ## ⚙️ Requisitos
 - Python **3.10+** (recomendado 3.10/3.11; 3.12 também funciona)
-- Dependências (pip): `ultralytics`, `opencv-python`, `numpy`, `pydantic`, `requests`, `paho-mqtt`, `pyyaml`, `fastapi`, `uvicorn`
+- Dependências (pip): `ultralytics`, `opencv-python`, `numpy`, `pydantic`, `requests`, `pyyaml`
 
 Instalação sugerida:
 ```bash
@@ -80,16 +79,19 @@ alarm:
   cooldown_seconds: 8  # evita spam
 
 outputs:
-  http:
+  gpio:
     enabled: true
-    url: http://127.0.0.1:8000/event
-    timeout: 2
-  mqtt:
-    enabled: false
-    broker: 127.0.0.1
-    port: 1883
-    topic: pool/alert
-    qos: 1
+    pin: 17           # GPIO de ALERTA (BCM)
+    setup: BCM        # BCM ou BOARD
+    active_high: true
+    mode: latch       # 'pulse' (pulso) ou 'latch' (fica ligado até limpar)
+    pulse_ms: 500     # usado apenas se mode='pulse'
+
+    #entrada digital para limpar o latch
+    clear_pin: 27         # GPIO de LIMPEZA (BCM). 
+    clear_active_high: true  # nível ativo do clear_pin (true = 1 limpa, false = 0 limpa)
+    clear_pull: PUD_DOWN     # PUD_UP | PUD_DOWN | NONE
+    clear_debounce_ms: 120   # antirruído por software
 ```
 
 ---
@@ -127,36 +129,6 @@ python main.py --config config.yaml
 
 ---
 
-## 📨 Esquema do evento (JSON)
-Exemplo do payload enviado por HTTP/MQTT:
-```json
-{
-  "source": "0",
-  "timestamp": 1712345678.12,
-  "roi_name": "pool",
-  "persons": 1,
-  "boxes": [[120, 80, 220, 340]],
-  "frame_w": 960,
-  "frame_h": 540,
-  "reason": "person_in_pool_roi"
-}
-```
-
-### Testar envio manual (HTTP)
-Com o servidor rodando (`server_demo.py`):
-```bash
-curl -X POST http://127.0.0.1:8000/event   -H 'Content-Type: application/json'   -d '{"source":"manual","timestamp":0,"roi_name":"pool","persons":1,"boxes":[[0,0,10,10]],"frame_w":100,"frame_h":100,"reason":"test"}'
-```
-
-### Testar MQTT
-- Suba um broker local (por exemplo, Mosquitto) e ative `outputs.mqtt.enabled: true`.
-- Assine o tópico:
-```bash
-mosquitto_sub -h 127.0.0.1 -t pool/alert -v
-```
-- Rode o `main.py` e veja as mensagens.
-
----
 
 ## ⌨️ Atalhos do teclado
 - **A** — armar/desarmar o sistema
@@ -175,34 +147,14 @@ mosquitto_sub -h 127.0.0.1 -t pool/alert -v
 ```makefile
 setup:   cria e instala o venv
 roi:     abre ferramenta de ROI
-server:  sobe o receptor HTTP
 run:     roda o sistema principal
 ```
 Uso:
 ```bash
 make setup
 make roi
-make server
 make run
 ```
-
----
-
-## 🧾 Solução de Problemas (FAQ)
-**Erro: `FileNotFoundError: roi_pool.yaml`**  
-→ Rode `python roi_setup.py` ou ajuste `roi.file` no `config.yaml` para o caminho correto.
-
-**Erro: `Invalid CUDA 'device=auto'` / `torch.cuda.is_available(): False`**  
-→ Use `device: cpu` no `config.yaml` (ou aplique o auto-resolve no `detector.py`).
-
-**Aviso: `Conexão recusada 127.0.0.1:8000`**  
-→ O receptor HTTP não está rodando. Suba `python server_demo.py` ou desative `outputs.http.enabled`.
-
-**Preview não abre**  
-→ Verifique `video.display: true`. No WSL/servidores remotos, GUI do OpenCV pode não funcionar.
-
-**ROI desalinhada**  
-→ Crie a ROI com a **mesma resolução** usada em execução (respeite `resize_width`).
 
 ---
 
@@ -212,7 +164,6 @@ make run
 - **Detecção automática da piscina** (segmentação/cor).
 - **Pré-alerta** (zona externa).
 - **Clips de evento** (gravar 5s antes/depois) com `cv2.VideoWriter`.
-- **Segurança** (TLS/token no webhook e MQTT).
 
 ---
 
@@ -225,13 +176,9 @@ make run
 - **Ultralytics YOLOv8 (`ultralytics`)** — **AGPL-3.0** (© Ultralytics). Cite no TCC:  
   JOCHER, G. et al. *Ultralytics YOLOv8*. Ultralytics, 2023–2025. Disponível em: https://github.com/ultralytics/ultralytics. Acesso em: 30 out. 2025.
 - **OpenCV** — **BSD-3-Clause**.
-- **FastAPI** — **MIT**.
 - **Pydantic** — **MIT**.
 - **NumPy** — **BSD-3-Clause**.
-- **Requests** — **Apache-2.0**.
-- **paho-mqtt** — **EPL-2.0**.
 - **PyYAML** — **MIT**.
-- **Uvicorn** — **BSD-3-Clause**.
 - (**Opcional/indireta**) **PyTorch** — **BSD-3-Clause**.
 
 > Observação: ao importar `ultralytics` (AGPL-3.0) diretamente, este projeto adota **AGPL-3.0** para manter a compatibilidade de licença.
