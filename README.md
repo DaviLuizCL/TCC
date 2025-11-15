@@ -104,13 +104,7 @@ python roi_setup.py --source 0 --out roi_pool.yaml
 - Clique os vértices do polígono (sentido horário ajuda). 
 - Pressione **ENTER** para salvar; **ESC** limpa os pontos.
 
-### 2) (Opcional) Subir o receptor HTTP
-```bash
-python server_demo.py
-```
-Você verá os **JSONs** chegando quando um alerta for disparado.
-
-### 3) Executar o sistema
+### 2) Executar o sistema
 ```bash
 python main.py --config config.yaml
 ```
