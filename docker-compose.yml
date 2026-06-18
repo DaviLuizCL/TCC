@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Base do TCC: commit ebb1037d5b20173e894d2b7bc7649f5aa2320b86 (branch master)
+#
+# Sobe o PoolGuard no notebook simulando o Raspberry Pi.
+#   docker compose up --build
+#   -> abra http://localhost:8000  (admin / poolguard — troque no config.yaml)
+
+services:
+  poolguard:
+    build: .
+    container_name: poolguard
+    ports:
+      - "8000:8000"
+    devices:
+      # Webcam do notebook -> container. Mapeada para /dev/video2 para casar com
+      # o 'video.source: /dev/video2' do config.yaml. Se sua câmera não for a
+      # video0, ajuste o lado esquerdo (ex.: /dev/video1:/dev/video2).
+      - "/dev/video0:/dev/video2"
+    volumes:
+      # Monta o projeto: config.yaml, roi_pool.yaml e events/ editados pelo
+      # painel web persistem no host, e dá pra editar o código sem rebuildar.
+      - .:/app
+    restart: unless-stopped

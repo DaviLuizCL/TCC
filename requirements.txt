@@ -4,6 +4,12 @@ numpy>=1.24.0
 pydantic>=1.10
 pyyaml>=6.0.1
 
+# Servidor de alerta + notificações no celular
+fastapi>=0.110
+uvicorn>=0.29
+requests>=2.31
+paho-mqtt>=1.6        # apenas se for usar o canal MQTT
+
 # Em Raspberry Pi OS:
 # RPi.GPIO costuma vir pré-instalado; se não, descomente:
 # RPi.GPIO>=0.7.0

@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PoolGuard</title>
+<style>
+  :root { --bg:#0d1117; --card:#161b22; --line:#30363d; --fg:#e6edf3; --mut:#8b949e;
+          --ok:#2ea043; --warn:#d29922; --alert:#f85149; --accent:#1f6feb; --child:#d2a8ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:12px 16px; background:var(--card); border-bottom:1px solid var(--line);
+           display:flex; align-items:center; gap:10px; flex-wrap:wrap; position:sticky; top:0; z-index:5;}
+  header h1 { font-size:18px; margin:0; }
+  .badges { display:flex; gap:8px; flex-wrap:wrap; margin-left:auto; }
+  .badge { font-size:12px; padding:4px 8px; border-radius:999px; background:#21262d; color:var(--mut); }
+  .badge.on { background:var(--ok); color:#fff; }
+  .badge.alert { background:var(--alert); color:#fff; }
+  .badge.warn { background:var(--warn); color:#000; }
+  main { max-width:920px; margin:0 auto; padding:16px; display:grid; gap:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .card h2 { margin:0 0 12px; font-size:15px; color:var(--mut); text-transform:uppercase; letter-spacing:.5px; }
+  .tabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+  .tab { padding:8px 14px; border:1px solid var(--line); border-radius:8px; background:#21262d;
+         cursor:pointer; font-size:14px; display:flex; align-items:center; gap:8px; }
+  .tab.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .dot { width:9px; height:9px; border-radius:50%; background:#555; }
+  .dot.on { background:var(--ok); } .dot.alert { background:var(--alert); }
+  img#video, canvas#roi { width:100%; border-radius:8px; background:#000; display:block; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  button { cursor:pointer; border:1px solid var(--line); background:#21262d; color:var(--fg);
+           padding:10px 16px; border-radius:8px; font-size:14px; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.alert { background:var(--alert); border-color:var(--alert); color:#fff; }
+  button.sm { padding:6px 10px; font-size:13px; }
+  label { display:block; font-size:13px; color:var(--mut); margin:10px 0 4px; }
+  input, select { width:100%; padding:9px 10px; background:#0d1117; border:1px solid var(--line);
+                  color:var(--fg); border-radius:8px; font-size:14px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0 12px; }
+  .chan, .cam { border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-top:10px; }
+  .chan summary { cursor:pointer; font-weight:600; }
+  .hint { font-size:12px; color:var(--mut); margin-top:6px; }
+  .inline { display:flex; gap:8px; align-items:center; }
+  .inline input { width:auto; }
+  .toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:#21262d;
+           border:1px solid var(--line); padding:10px 16px; border-radius:8px; opacity:0;
+           transition:opacity .25s; pointer-events:none; max-width:90%; }
+  .toast.show { opacity:1; }
+  @media (max-width:560px){ .grid2{grid-template-columns:1fr;} }
+</style>
+</head>
+<body>
+<header>
+  <h1>🛟 PoolGuard</h1>
+  <div class="badges">
+    <span class="badge" id="b-cam">câmera</span>
+    <span class="badge" id="b-fps">-- fps</span>
+    <span class="badge" id="b-people">--</span>
+    <span class="badge" id="b-armed">desarmado</span>
+    <span class="badge" id="b-alert">ok</span>
+  </div>
+</header>
+
+<main>
+  <div class="card">
+    <h2>Ao vivo</h2>
+    <div class="tabs" id="tabs"></div>
+    <img id="video" alt="stream">
+    <div class="row" style="margin-top:12px">
+      <button id="btn-arm" class="primary">Armar/Desarmar (câmera)</button>
+      <button id="btn-clear" class="alert">Limpar alerta</button>
+      <span class="hint" id="last-event"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Área da piscina (ROI) — <span id="roi-cam-name">—</span></h2>
+    <p class="hint">Clique no vídeo para marcar os vértices. Mínimo 3 pontos. Cada câmera tem a sua.</p>
+    <canvas id="roi"></canvas>
+    <div class="row" style="margin-top:12px">
+      <button id="roi-reload">Recarregar imagem</button>
+      <button id="roi-clear">Limpar pontos</button>
+      <button id="roi-save" class="primary">Salvar ROI</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Regras de alerta (criança / adulto)</h2>
+    <div class="grid2">
+      <div><label>Ativar classificação?</label>
+        <select id="cl-enabled"><option value="true">sim</option><option value="false">não</option></select></div>
+      <div><label>Altura p/ ser "criança" (% do frame): <b id="cl-frac-v"></b></label>
+        <input id="cl-frac" type="range" min="0.2" max="0.8" step="0.05"></div>
+      <div><label>Criança sozinha → alerta?</label>
+        <select id="cl-alone"><option value="true">sim</option><option value="false">não</option></select></div>
+      <div><label>Criança + adulto FORA do horário → alerta?</label>
+        <select id="cl-outside"><option value="true">sim</option><option value="false">não</option></select></div>
+    </div>
+    <label>Horários permitidos (supervisão válida — fora deles, criança+adulto alerta)</label>
+    <div id="hours"></div>
+    <button id="hours-add" class="sm" style="margin-top:8px">+ horário</button>
+    <p class="hint">Sem nenhum horário = sempre permitido. Suporta cruzar a meia-noite (ex.: 22:00–06:00).</p>
+  </div>
+
+  <div class="card">
+    <h2>Câmeras</h2>
+    <div id="cams"></div>
+    <button id="cam-add" class="sm" style="margin-top:10px">+ câmera</button>
+    <p class="hint">Fonte: <code>0</code>/<code>/dev/video2</code> (webcam) ou <code>rtsp://user:senha@ip:554/...</code>.
+      Limite do tier: <b id="cam-max">3</b>. Adicionar/remover câmera exige reiniciar o servidor.</p>
+  </div>
+
+  <div class="card">
+    <h2>Configurações gerais</h2>
+    <div class="grid2">
+      <div><label>Backend câmera</label>
+        <select id="c-backend"><option>auto</option><option>v4l2</option><option>any</option></select></div>
+      <div><label>Resolução (largura)</label><input id="c-resize" type="number"></div>
+      <div><label>Inferir a cada N frames</label><input id="c-infer" type="number" min="1"></div>
+      <div><label>Modelo</label>
+        <select id="c-weights"><option>yolov8n.pt</option><option>yolov8s.pt</option></select></div>
+      <div><label>Device</label><input id="c-device" placeholder="cpu / cuda:0"></div>
+      <div><label>Confiança (0–1)</label><input id="c-conf" type="number" step="0.05" min="0" max="1"></div>
+      <div><label>Área mínima (px²)</label><input id="c-area" type="number"></div>
+      <div><label>Permanência / dwell (s)</label><input id="c-dwell" type="number" step="0.1"></div>
+      <div><label>Dwell criança sozinha (s) ⚡</label><input id="c-dwell-child" type="number" step="0.1"></div>
+      <div><label>Cooldown (s)</label><input id="c-cooldown" type="number" step="0.5"></div>
+      <div><label>Começar armado?</label>
+        <select id="c-start"><option value="true">sim</option><option value="false">não</option></select></div>
+    </div>
+
+    <h2 style="margin-top:18px">Canais de alerta</h2>
+    <div id="channels"></div>
+
+    <div class="row" style="margin-top:14px">
+      <button id="cfg-save" class="primary">Salvar tudo</button>
+      <span class="hint">Salvar aplica em tempo real (exceto adicionar/remover câmera).</span>
+    </div>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const ce = (t,p={}) => Object.assign(document.createElement(t), p);
+const toast = m => { const t=$("#toast"); t.textContent=m; t.classList.add("show");
+  setTimeout(()=>t.classList.remove("show"), 2600); };
+async function api(path, opts){ const r=await fetch(path, opts);
+  if(!r.ok) throw new Error(await r.text());
+  return r.headers.get("content-type")?.includes("json") ? r.json() : r; }
+const J = (path,body,method="POST") => api(path,{method,headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+
+let CAMERAS=[], CUR=null, CFG={};
+
+// ---------- abas de câmera ----------
+async function loadCameras(){
+  CAMERAS = await api("/api/cameras");
+  CUR = CAMERAS.length ? CAMERAS[0].id : null;
+  renderTabs();
+  selectCam(CUR);
+}
+function renderTabs(){
+  const box=$("#tabs"); box.innerHTML="";
+  for(const c of CAMERAS){
+    const t=ce("div",{className:"tab"+(c.id===CUR?" active":"")});
+    t.dataset.id=c.id;
+    t.append(ce("span",{className:"dot",id:"dot-"+c.id}), document.createTextNode(c.name));
+    t.onclick=()=>{ CUR=c.id; renderTabs(); selectCam(c.id); };
+    box.appendChild(t);
+  }
+}
+function selectCam(id){
+  if(!id) return;
+  const c = CAMERAS.find(x=>x.id===id);
+  $("#video").src="/stream/"+id;
+  $("#roi-cam-name").textContent = c? c.name : "—";
+  loadSnapshot();
+}
+
+// ---------- status ----------
+async function poll(){
+  try{
+    const s = (await api("/api/status")).cameras || {};
+    for(const c of CAMERAS){
+      const st=s[c.id]; if(!st) continue;
+      const dot=$("#dot-"+c.id);
+      if(dot) dot.className="dot "+(st.triggered?"alert":(st.camera==="ok"?"on":""));
+    }
+    const st=s[CUR]; if(!st) return;
+    set("#b-cam", st.camera, st.camera==="ok"?"on":"warn");
+    $("#b-fps").textContent = st.fps+" fps";
+    $("#b-people").textContent = st.children!=null
+      ? `C:${st.children} A:${st.adults} ${st.allowed?"(permitido)":"(fora)"}`
+      : `${st.in_roi} na ROI`;
+    set("#b-armed", st.armed?"armado":"desarmado", st.armed?"on":"");
+    set("#b-alert", st.triggered?"ALERTA":"ok", st.triggered?"alert":"");
+    $("#last-event").textContent = st.last_event ? ("último alerta: "+st.last_event) : "";
+  }catch(e){ set("#b-cam","offline","alert"); }
+}
+function set(sel,txt,cls){ const el=$(sel); el.textContent=txt; el.className="badge"+(cls?(" "+cls):""); }
+
+// ---------- controles ----------
+$("#btn-arm").onclick = async ()=>{
+  const st=(await api("/api/status")).cameras[CUR];
+  await J("/api/arm",{cam_id:CUR, armed:!st.armed});
+  toast(!st.armed?"Câmera armada":"Câmera desarmada"); poll();
+};
+$("#btn-clear").onclick = async ()=>{ await api("/api/clear",{method:"POST"}); toast("Alerta limpo"); };
+
+// ---------- ROI ----------
+const canvas=$("#roi"), ctx=canvas.getContext("2d");
+let img=new Image(), pts=[];
+async function loadSnapshot(){
+  img=new Image();
+  img.onload=()=>{ canvas.width=img.naturalWidth; canvas.height=img.naturalHeight; drawRoi(); };
+  img.onerror=()=>{ ctx.clearRect(0,0,canvas.width,canvas.height); };
+  img.src="/api/snapshot/"+CUR+"?t="+Date.now();
+  try{ const r=await api("/api/roi/"+CUR); pts=(r.polygon||[]).map(p=>[+p[0],+p[1]]); }catch(e){ pts=[]; }
+}
+function drawRoi(){
+  ctx.drawImage(img,0,0);
+  ctx.fillStyle="#1f6feb"; ctx.strokeStyle="#ffeb3b"; ctx.lineWidth=3;
+  ctx.beginPath();
+  pts.forEach((p,i)=> i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]));
+  if(pts.length>2) ctx.closePath();
+  ctx.stroke();
+  pts.forEach(p=>{ ctx.beginPath(); ctx.arc(p[0],p[1],6,0,7); ctx.fill(); });
+}
+canvas.onclick = e=>{
+  const r=canvas.getBoundingClientRect();
+  pts.push([Math.round((e.clientX-r.left)*(canvas.width/r.width)),
+            Math.round((e.clientY-r.top)*(canvas.height/r.height))]);
+  drawRoi();
+};
+$("#roi-reload").onclick=loadSnapshot;
+$("#roi-clear").onclick=()=>{ pts=[]; drawRoi(); };
+$("#roi-save").onclick=async ()=>{
+  if(pts.length<3) return toast("Marque ao menos 3 pontos");
+  try{ await J("/api/roi/"+CUR,{polygon:pts}); toast("ROI salva"); }
+  catch(e){ toast("Erro: "+e.message); }
+};
+
+// ---------- classificação / horários ----------
+$("#cl-frac").oninput=()=> $("#cl-frac-v").textContent = Math.round($("#cl-frac").value*100)+"%";
+function addHourRow(h={start:"08:00",end:"18:00"}){
+  const div=ce("div",{className:"inline", style:"margin-top:6px"});
+  const s=ce("input",{type:"time",value:h.start}); const e=ce("input",{type:"time",value:h.end});
+  const del=ce("button",{className:"sm",textContent:"×"}); del.onclick=()=>div.remove();
+  div.append(s, document.createTextNode("até"), e, del);
+  $("#hours").appendChild(div);
+}
+$("#hours-add").onclick=()=>addHourRow();
+function readHours(){
+  return [...$("#hours").querySelectorAll(".inline")].map(d=>{
+    const [s,e]=d.querySelectorAll("input"); return {start:s.value, end:e.value};
+  }).filter(h=>h.start&&h.end);
+}
+
+// ---------- câmeras ----------
+let MAXCAM=3;
+function addCamRow(c={name:"",source:""}){
+  if($("#cams").children.length>=MAXCAM) return toast("Limite do tier: "+MAXCAM+" câmeras");
+  const div=ce("div",{className:"cam"});
+  div.innerHTML=`<div class="grid2">
+      <div><label>Nome</label><input class="cam-name" value="${c.name||""}"></div>
+      <div><label>Fonte (webcam ou rtsp://)</label><input class="cam-src" value="${c.source??""}"></div>
+    </div>`;
+  const del=ce("button",{className:"sm",textContent:"remover câmera",style:"margin-top:8px"});
+  del.onclick=()=>div.remove(); div.appendChild(del);
+  div.dataset.id=c.id||""; div.dataset.roi=c.roi_file||"";
+  $("#cams").appendChild(div);
+}
+$("#cam-add").onclick=()=>addCamRow();
+function readCameras(){
+  return [...$("#cams").children].map((d,i)=>{
+    const id=d.dataset.id||("cam"+(i+1));
+    return { id, name:d.querySelector(".cam-name").value||("Câmera "+(i+1)),
+             source: numOrStr(d.querySelector(".cam-src").value),
+             roi_file: d.dataset.roi||("roi_"+id+".yaml") };
+  });
+}
+const numOrStr = v => /^\d+$/.test(String(v).trim()) ? +v : v;
+
+// ---------- canais ----------
+const CH = [
+  {k:"ntfy", label:"ntfy (push grátis)", fields:[["server","Servidor","https://ntfy.sh"],["topic","Tópico (secreto)",""],["priority","Prioridade","urgent"],["token","Token (opcional)",""]]},
+  {k:"telegram", label:"Telegram", fields:[["bot_token","Bot token",""],["chat_id","Chat ID",""]]},
+  {k:"mqtt", label:"MQTT", fields:[["host","Host","localhost"],["port","Porta","1883"],["topic","Tópico","poolguard/alert"],["username","Usuário",""],["password","Senha",""]]},
+  {k:"pushover", label:"Pushover", fields:[["token","App token",""],["user","User key",""],["priority","Prioridade","1"]]},
+  {k:"gotify", label:"Gotify", fields:[["server","Servidor",""],["token","Token",""],["priority","Prioridade","8"]]},
+];
+function buildChannels(){
+  const box=$("#channels"); box.innerHTML="";
+  for(const c of CH){
+    const d=ce("details",{className:"chan"});
+    let inner=`<summary>${c.label} <label style="display:inline"><input type="checkbox" id="ch-${c.k}-enabled" style="width:auto"> ativo</label></summary>`;
+    for(const [f,lab,ph] of c.fields) inner+=`<label>${lab}</label><input id="ch-${c.k}-${f}" placeholder="${ph}">`;
+    d.innerHTML=inner; box.appendChild(d);
+  }
+}
+
+// ---------- carregar / salvar config ----------
+async function loadConfig(){
+  CFG = await api("/api/config");
+  const v=CFG.video||{}, m=CFG.model||{}, a=CFG.alarm||{}, cl=CFG.classify||{};
+  $("#c-backend").value=v.backend||"auto"; $("#c-resize").value=v.resize_width??960;
+  $("#c-infer").value=v.infer_every??1; $("#c-weights").value=m.weights||"yolov8n.pt";
+  $("#c-device").value=m.device||"cpu"; $("#c-conf").value=m.conf??0.5;
+  $("#c-area").value=a.min_box_area??7000; $("#c-dwell").value=a.dwell_seconds??1.5;
+  $("#c-dwell-child").value=a.dwell_child_alone_seconds??0.5;
+  $("#c-cooldown").value=a.cooldown_seconds??8; $("#c-start").value=String(a.enabled_start??true);
+
+  $("#cl-enabled").value=String(cl.enabled??false);
+  $("#cl-frac").value=cl.child_height_frac??0.45; $("#cl-frac-v").textContent=Math.round(($("#cl-frac").value)*100)+"%";
+  $("#cl-alone").value=String(cl.alert_child_alone??true);
+  $("#cl-outside").value=String(cl.alert_child_with_adult_outside_hours??true);
+  $("#hours").innerHTML=""; (cl.allowed_hours||[]).forEach(addHourRow);
+
+  MAXCAM=(CFG.product||{}).max_cameras||3; $("#cam-max").textContent=MAXCAM;
+  $("#cams").innerHTML=""; (CFG.cameras||[]).forEach(addCamRow);
+
+  const ch=(CFG.notify&&CFG.notify.channels)||{};
+  for(const c of CH){ const cc=ch[c.k]||{};
+    $(`#ch-${c.k}-enabled`).checked=!!cc.enabled;
+    for(const [f] of c.fields){ const el=$(`#ch-${c.k}-${f}`); if(el&&cc[f]!=null) el.value=cc[f]; }
+  }
+}
+$("#cfg-save").onclick = async ()=>{
+  const payload = {
+    product:{ max_cameras: MAXCAM },
+    cameras: readCameras(),
+    video:{ backend:$("#c-backend").value, resize_width:+$("#c-resize").value, infer_every:+$("#c-infer").value },
+    model:{ weights:$("#c-weights").value, device:$("#c-device").value, conf:+$("#c-conf").value },
+    alarm:{ min_box_area:+$("#c-area").value, dwell_seconds:+$("#c-dwell").value,
+            dwell_child_alone_seconds:+$("#c-dwell-child").value,
+            cooldown_seconds:+$("#c-cooldown").value, enabled_start:$("#c-start").value==="true" },
+    classify:{ enabled:$("#cl-enabled").value==="true", child_height_frac:+$("#cl-frac").value,
+               alert_child_alone:$("#cl-alone").value==="true",
+               alert_child_with_adult_outside_hours:$("#cl-outside").value==="true",
+               allowed_hours:readHours() },
+    notify: Object.assign({}, CFG.notify, {channels:{}}),
+  };
+  for(const c of CH){ const obj={enabled:$(`#ch-${c.k}-enabled`).checked};
+    for(const [f] of c.fields){ const val=$(`#ch-${c.k}-${f}`).value;
+      if(val!=="") obj[f]=(f==="port"||f==="priority")?+val:val; }
+    payload.notify.channels[c.k]=obj;
+  }
+  try{ const r=await J("/api/config",payload);
+    toast(r.restart_needed ? "Salvo! Reinicie o servidor (mudança de câmeras)." : "Configurações salvas e aplicadas");
+    if(r.restart_needed) return; await loadConfig();
+  }catch(e){ toast("Erro ao salvar: "+e.message); }
+};
+
+// ---------- init ----------
+buildChannels();
+loadConfig().then(loadCameras);
+poll(); setInterval(poll, 1000);
+</script>
+</body>
+</html>

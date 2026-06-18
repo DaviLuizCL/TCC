@@ -1,34 +1,75 @@
+product:
+  max_cameras: 3
+cameras:
+- id: cam1
+  name: Piscina Principal
+  source: /dev/video2
+  roi_file: roi_cam1.yaml
 video:
-  source: 0
   display: true
   resize_width: 960
-
+  backend: auto
+  infer_every: 1
+classify:
+  enabled: true
+  child_height_frac: 0.45
+  alert_child_alone: true
+  alert_child_with_adult_outside_hours: true
+  allowed_hours:
+  - start: 08:00
+    end: '18:00'
 model:
   weights: yolov8n.pt
   conf: 0.5
   iou: 0.45
   device: cpu
-
 roi:
   file: roi_pool.yaml
-
 alarm:
   enabled_start: true
-  dwell_seconds: 1.5
+  dwell_seconds: 1.5            # tempo na ROI p/ disparar (casos não-críticos)
+  dwell_child_alone_seconds: 0.5  # CRÍTICO: criança sozinha dispara quase na hora
+  dwell_grace_seconds: 0.6     # tolera falhas breves de detecção sem zerar o dwell
   min_box_area: 7000
-  cooldown_seconds: 8
-
+  cooldown_seconds: 2
 outputs:
   gpio:
     enabled: true
-    pin: 17           # GPIO de ALERTA (BCM)
-    setup: BCM        # BCM ou BOARD
+    pin: 17
+    setup: BCM
     active_high: true
-    mode: latch       # 'pulse' (pulso) ou 'latch' (fica ligado até limpar)
-    pulse_ms: 500     # usado apenas se mode='pulse'
-
-    # NOVO: entrada digital para limpar o latch (opcional)
-    clear_pin: 27         # GPIO de LIMPEZA (BCM). Comente/retire para não usar.
-    clear_active_high: true  # nível ativo do clear_pin (true = 1 limpa, false = 0 limpa)
-    clear_pull: PUD_DOWN     # PUD_UP | PUD_DOWN | NONE
-    clear_debounce_ms: 120   # antirruído por software
+    mode: latch
+    pulse_ms: 500
+    clear_pin: 27
+    clear_active_high: true
+    clear_pull: PUD_DOWN
+    clear_debounce_ms: 120
+web:
+  username: admin
+  password: poolguard
+  host: 0.0.0.0
+  port: 8000
+notify:
+  title: PoolGuard — ALERTA
+  message: Pessoa detectada na area da piscina!
+  snapshot: true
+  channels:
+    ntfy:
+      enabled: true
+      server: https://ntfy.sh
+      topic: poolguard-troque-este-topico-secreto
+      priority: null
+    telegram:
+      enabled: false
+    mqtt:
+      enabled: false
+      host: localhost
+      port: 1883
+      topic: poolguard/alert
+    pushover:
+      enabled: false
+      priority: 1
+    gotify:
+      enabled: false
+      server: http://localhost:8080
+      priority: 8

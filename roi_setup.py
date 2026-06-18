@@ -14,7 +14,7 @@ def main():
     ap.add_argument('--out', default='roi_pool.yaml')
     args = ap.parse_args()
 
-    cap = cv2.VideoCapture(0 if args.source == '0' else args.source)
+    cap = cv2.VideoCapture(int(args.source), cv2.CAP_V4L2)
     ok, frame = cap.read()
     if not ok:
         raise RuntimeError('Não foi possível ler do source')
