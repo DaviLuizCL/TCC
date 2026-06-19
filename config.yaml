@@ -7,9 +7,17 @@ cameras:
   roi_file: roi_cam1.yaml
 video:
   display: true
-  resize_width: 960
+  resize_width: 640      # frame de trabalho menor = menos decode/encode no Pi
   backend: auto
-  infer_every: 1
+  infer_every: 2         # roda YOLO a cada 2 frames (o dwell suaviza)
+  stream_fps: 12         # teto de FPS do preview web (poupa CPU encodando JPEG)
+motion:
+  enabled: true          # porteiro: só aciona o YOLO quando algo mexe na ROI
+  diff_thresh: 18        # sensibilidade do diff (maior = ignora ruído/ondulação)
+  min_motion_frac: 0.004 # fração mínima de pixels mudados p/ considerar movimento
+  person_hold_seconds: 4.0    # após ver alguém, segue checando mesmo parado
+  motion_hold_seconds: 1.5    # mantém YOLO ligado logo após um movimento
+  heartbeat_seconds: 2.0      # mesmo ocioso, força 1 checagem a cada 2s (segurança)
 classify:
   enabled: true
   child_height_frac: 0.45
@@ -19,10 +27,11 @@ classify:
   - start: 08:00
     end: '18:00'
 model:
-  weights: yolov8n.pt
+  weights: yolov8n_ncnn_model   # NCNN: ~2-3x mais rápido e menos RAM no Pi (gere com 'make export')
   conf: 0.5
   iou: 0.45
   device: cpu
+  imgsz: 320                     # resolução de inferência: 320 detecta bem e é ~4x mais leve que 640
 roi:
   file: roi_pool.yaml
 alarm:
@@ -38,7 +47,7 @@ outputs:
     pin: 17
     setup: BCM
     active_high: true
-    mode: latch
+    mode: sustained        # sirene segue o alarme: ligada enquanto a criança está na ROI, desliga ao sair
     pulse_ms: 500
     clear_pin: 27
     clear_active_high: true

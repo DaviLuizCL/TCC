@@ -98,6 +98,14 @@ class GpioAlerter:
             time.sleep(0.2)
             GPIO.output(self.cfg.pin, self._level(False))
 
+    def set_active(self, active: bool):
+        """Mantém o pino no nível ativo/inativo de forma contínua.
+
+        É o modo "sustentado": a sirene fica ligada enquanto o alarme estiver
+        ativo (criança na ROI) e desliga sozinha quando o alarme cessa.
+        """
+        GPIO.output(self.cfg.pin, self._level(bool(active)))
+
     def clear(self):
         """Força o pino ao nível inativo (útil para modo 'latch')."""
         GPIO.output(self.cfg.pin, self._level(False))

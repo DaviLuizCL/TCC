@@ -34,6 +34,15 @@
   button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
   button.alert { background:var(--alert); border-color:var(--alert); color:#fff; }
   button.sm { padding:6px 10px; font-size:13px; }
+  .bigbtn { width:100%; padding:22px 16px; font-size:20px; font-weight:700; border-radius:14px;
+            border:2px solid var(--line); background:#21262d; color:var(--mut); cursor:pointer;
+            display:flex; align-items:center; justify-content:center; gap:12px; letter-spacing:.3px;
+            transition:background .2s,border-color .2s,color .2s; }
+  .bigbtn .sub { display:block; font-size:13px; font-weight:500; opacity:.85; }
+  .bigbtn.on   { background:var(--ok);    border-color:var(--ok);    color:#fff; }
+  .bigbtn.off  { background:#21262d;      border-color:var(--line);  color:var(--mut); }
+  .bigbtn.alarm{ background:var(--alert);  border-color:var(--alert); color:#fff; animation:pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.5;} }
   label { display:block; font-size:13px; color:var(--mut); margin:10px 0 4px; }
   input, select { width:100%; padding:9px 10px; background:#0d1117; border:1px solid var(--line);
                   color:var(--fg); border-radius:8px; font-size:14px; }
@@ -67,9 +76,9 @@
     <h2>Ao vivo</h2>
     <div class="tabs" id="tabs"></div>
     <img id="video" alt="stream">
-    <div class="row" style="margin-top:12px">
-      <button id="btn-arm" class="primary">Armar/Desarmar (câmera)</button>
-      <button id="btn-clear" class="alert">Limpar alerta</button>
+    <button id="btn-arm" class="bigbtn off" style="margin-top:12px">—</button>
+    <div class="row" style="margin-top:10px">
+      <button id="btn-clear" class="alert sm">Silenciar alerta agora</button>
       <span class="hint" id="last-event"></span>
     </div>
   </div>
@@ -119,7 +128,7 @@
       <div><label>Resolução (largura)</label><input id="c-resize" type="number"></div>
       <div><label>Inferir a cada N frames</label><input id="c-infer" type="number" min="1"></div>
       <div><label>Modelo</label>
-        <select id="c-weights"><option>yolov8n.pt</option><option>yolov8s.pt</option></select></div>
+        <select id="c-weights"><option>yolov8n_ncnn_model</option><option>yolov8n.pt</option><option>yolov8s.pt</option></select></div>
       <div><label>Device</label><input id="c-device" placeholder="cpu / cuda:0"></div>
       <div><label>Confiança (0–1)</label><input id="c-conf" type="number" step="0.05" min="0" max="1"></div>
       <div><label>Área mínima (px²)</label><input id="c-area" type="number"></div>
@@ -196,6 +205,18 @@ async function poll(){
       : `${st.in_roi} na ROI`;
     set("#b-armed", st.armed?"armado":"desarmado", st.armed?"on":"");
     set("#b-alert", st.triggered?"ALERTA":"ok", st.triggered?"alert":"");
+    // botão grande de ligar/desligar a proteção (reflete o estado atual)
+    const arm=$("#btn-arm");
+    if(st.triggered){
+      arm.className="bigbtn alarm";
+      arm.innerHTML="🚨 ALERTA — CRIANÇA NA PISCINA<span class='sub'>toque para desligar a proteção</span>";
+    }else if(st.armed){
+      arm.className="bigbtn on";
+      arm.innerHTML="🛡️ PROTEÇÃO LIGADA<span class='sub'>monitorando — toque para desligar</span>";
+    }else{
+      arm.className="bigbtn off";
+      arm.innerHTML="⭘ PROTEÇÃO DESLIGADA<span class='sub'>toque para ligar</span>";
+    }
     $("#last-event").textContent = st.last_event ? ("último alerta: "+st.last_event) : "";
   }catch(e){ set("#b-cam","offline","alert"); }
 }
@@ -205,7 +226,7 @@ function set(sel,txt,cls){ const el=$(sel); el.textContent=txt; el.className="ba
 $("#btn-arm").onclick = async ()=>{
   const st=(await api("/api/status")).cameras[CUR];
   await J("/api/arm",{cam_id:CUR, armed:!st.armed});
-  toast(!st.armed?"Câmera armada":"Câmera desarmada"); poll();
+  toast(!st.armed?"Proteção ligada":"Proteção desligada"); poll();
 };
 $("#btn-clear").onclick = async ()=>{ await api("/api/clear",{method:"POST"}); toast("Alerta limpo"); };
 

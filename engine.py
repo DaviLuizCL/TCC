@@ -29,7 +29,7 @@ import cv2
 import numpy as np
 
 from detector import PersonDetector
-from utils import load_roi, center_of, point_in_poly, DwellTimer, Cooldown
+from utils import load_roi, center_of, point_in_poly, DwellTimer, Cooldown, MotionGate
 from alerting import GpioAlerter, GpioConfig
 from notifier import Notifier
 
@@ -98,9 +98,11 @@ def draw_overlay(frame, roi, boxes, armed, triggered, classify=False, info=""):
 
 class DetectionEngine:
     def __init__(self, cfg: dict, name="Câmera", source=0, roi_path="roi_pool.yaml",
-                 on_alert=None, events_dir="events"):
+                 on_alert=None, on_alarm=None, events_dir="events"):
         self.name = name
-        self.on_alert = on_alert            # callable(camera_name, snapshot_bytes|None)
+        self.on_alert = on_alert            # borda de subida: notificações + snapshot
+        self.on_alarm = on_alarm            # estado contínuo: liga/desliga a sirene (GPIO)
+        self._alarm_active = False
         self.roi_path = roi_path
         self.events_dir = events_dir
         self._source_override = source
@@ -109,14 +111,14 @@ class DetectionEngine:
         self._stop = threading.Event()
         self._thread = None
         self._frame_jpeg = None
-        self._raw_jpeg = None
+        self._raw_frame = None
         self._pending_cfg = None
         self._pending_roi = None
 
         self.status = {
             "name": name, "running": False, "armed": False, "triggered": False,
             "detections": 0, "in_roi": 0, "children": 0, "adults": 0,
-            "allowed": True, "fps": 0.0, "camera": "iniciando",
+            "allowed": True, "fps": 0.0, "infer_fps": 0.0, "camera": "iniciando",
             "source": str(source), "last_event": None,
         }
 
@@ -128,7 +130,8 @@ class DetectionEngine:
         self.cfg = cfg
         m = cfg["model"]
         self.det = PersonDetector(weights=m["weights"], conf=float(m["conf"]),
-                                  iou=float(m["iou"]), device=m["device"])
+                                  iou=float(m["iou"]), device=m["device"],
+                                  imgsz=int(m.get("imgsz", 320)))
         a = cfg["alarm"]
         self.dwell = DwellTimer(float(a.get("dwell_grace_seconds", 0.6)))
         self.dwell_default = float(a["dwell_seconds"])
@@ -142,6 +145,17 @@ class DetectionEngine:
         self.backend = str(v.get("backend", "auto")).lower()
         self.resize_w = int(v.get("resize_width", 0))
         self.infer_every = max(1, int(v.get("infer_every", 1)))
+
+        # Porteiro de movimento: só aciona o YOLO quando algo mexe na ROI.
+        mo = cfg.get("motion", {}) or {}
+        self.motion = MotionGate(
+            enabled=bool(mo.get("enabled", True)),
+            diff_thresh=int(mo.get("diff_thresh", 18)),
+            min_motion_frac=float(mo.get("min_motion_frac", 0.004)),
+            person_hold_s=float(mo.get("person_hold_seconds", 4.0)),
+            motion_hold_s=float(mo.get("motion_hold_seconds", 1.5)),
+            heartbeat_s=float(mo.get("heartbeat_seconds", 2.0)),
+        )
 
         c = cfg.get("classify", {}) or {}
         self.classify_enabled = bool(c.get("enabled", False))
@@ -198,8 +212,11 @@ class DetectionEngine:
     def _loop(self):
         cap = self._open_cap()
         last_dets = []
+        last_person = False
         frame_i = 0
-        fps_t, fps_n = time.time(), 0
+        fps_t, fps_n, infer_n = time.time(), 0, 0
+        enc_t = 0.0
+        stream_min_dt = 1.0 / max(1, int((self.cfg.get("video", {}) or {}).get("stream_fps", 12)))
 
         while not self._stop.is_set():
             if self._pending_cfg is not None:
@@ -235,13 +252,22 @@ class DetectionEngine:
                 frame = cv2.resize(frame, None, fx=scale, fy=scale)
                 h, w = frame.shape[:2]
 
-            if frame_i % self.infer_every == 0:
+            # Porteiro de movimento decide se vale acionar o YOLO neste frame.
+            now = time.time()
+            gate_run = self.motion.should_run(frame, self.roi, last_person, now)
+            if gate_run and frame_i % self.infer_every == 0:
                 dets = [d for d in self.det.detect(frame) if d["area"] >= self.min_box_area]
                 if self.classify_enabled:
                     self._classify(dets, h)
                 last_dets = dets
+                last_person = len(dets) > 0
+                infer_n += 1
+            elif not self.motion.active:
+                # gate ocioso confirmado: ninguém na cena, descarta boxes antigas
+                dets = last_dets = []
+                last_person = False
             else:
-                dets = last_dets
+                dets = last_dets  # janela de hold: reaproveita a última detecção
             frame_i += 1
 
             in_roi_dets = []
@@ -257,23 +283,37 @@ class DetectionEngine:
             present = self._armed and should
             elapsed = self.dwell.update(present)
             need = self.dwell_child_alone if case == "child_alone" else self.dwell_default
-            triggered = False
-            if present and elapsed >= need and self.cooldown.ready():
-                self._fire(frame, dets)
+
+            # Alarme SUSTENTADO: fica ativo enquanto a condição persistir (após o
+            # dwell) e cai sozinho quando a criança sai (o grace do dwell evita
+            # piscar em falhas breves de detecção). A sirene (GPIO) segue esse
+            # estado; as notificações de celular saem 1x por episódio (cooldown).
+            alarm_on = self._armed and elapsed >= need
+            rising = alarm_on and not self._alarm_active
+            if rising and self.cooldown.ready():
+                self._fire(frame, dets)   # snapshot + notificações (borda de subida)
                 self.cooldown.mark()
-                triggered = True
+            self._alarm_active = alarm_on
+            if self.on_alarm is not None:
+                self.on_alarm(self.name, alarm_on)   # liga/desliga a sirene (deduplicado no sink)
+            triggered = alarm_on
 
             info = ""
             if self.classify_enabled:
                 info = f"C:{children} A:{adults} {'PERMITIDO' if allowed else 'FORA'}"
-            okr, raw = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
-            vis = draw_overlay(frame, self.roi, dets, self._armed, triggered,
-                               classify=self.classify_enabled, info=info)
-            oka, ann = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 70])
+
+            # O preview não precisa da taxa total de captura: codifica o JPEG
+            # anotado no máximo a stream_fps (poupa CPU do Pi). O frame "raw" é
+            # guardado cru e só vira JPEG sob demanda em get_raw() (/api/snapshot).
+            do_encode = triggered or (now - enc_t) >= stream_min_dt
+            if do_encode:
+                vis = draw_overlay(frame, self.roi, dets, self._armed, triggered,
+                                   classify=self.classify_enabled, info=info)
+                oka, ann = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                enc_t = now
             with self._lock:
-                if okr:
-                    self._raw_jpeg = raw.tobytes()
-                if oka:
+                self._raw_frame = frame
+                if do_encode and oka:
                     self._frame_jpeg = ann.tobytes()
                 self.status.update(triggered=triggered, detections=len(dets),
                                    in_roi=len(in_roi_dets), children=children,
@@ -284,10 +324,15 @@ class DetectionEngine:
             if dt >= 1.0:
                 with self._lock:
                     self.status["fps"] = round(fps_n / dt, 1)
-                fps_t, fps_n = time.time(), 0
+                    self.status["infer_fps"] = round(infer_n / dt, 1)
+                fps_t, fps_n, infer_n = time.time(), 0, 0
 
         if cap is not None:
             cap.release()
+        # ao parar, garante que a sirene não fique presa ligada
+        self._alarm_active = False
+        if self.on_alarm is not None:
+            self.on_alarm(self.name, False)
         with self._lock:
             self.status["running"] = False
             self.status["camera"] = "parado"
@@ -355,8 +400,14 @@ class DetectionEngine:
             return self._frame_jpeg
 
     def get_raw(self):
+        # Codifica o frame cru só quando alguém pede (ex.: /api/snapshot),
+        # evitando um cv2.imencode por frame no loop principal.
         with self._lock:
-            return self._raw_jpeg
+            frame = self._raw_frame
+        if frame is None:
+            return None
+        ok, raw = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+        return raw.tobytes() if ok else None
 
     def get_status(self):
         with self._lock:
@@ -373,10 +424,14 @@ class AlertSink:
     def __init__(self, cfg: dict):
         self.gpio = None
         self.notifier = None
+        self._alarm_lock = threading.Lock()
+        self._active_cams = set()   # câmeras que querem a sirene ligada agora
+        self._gpio_on = False       # último nível enviado ao GPIO (evita reescrever)
         self.reconfigure(cfg)
 
     def reconfigure(self, cfg: dict):
         self.notifier = Notifier(cfg.get("notify", {}) or {})
+        self._gpio_on = False       # gpio recriado abaixo nasce inativo; reassere no próximo estado
         gd = (cfg.get("outputs", {}) or {}).get("gpio", {}) or {}
         if self.gpio is not None:
             try:
@@ -399,12 +454,25 @@ class AlertSink:
                 print("[GPIO] Falha ao inicializar:", e)
                 self.gpio = None
 
-    def handle(self, camera_name, snapshot=None):
-        if self.gpio is not None:
+    def set_alarm(self, camera_name, active):
+        """Liga/desliga a sirene de forma contínua. A sirene fica ligada se QUALQUER
+        câmera estiver em alarme (o GPIO é um hardware só, compartilhado)."""
+        with self._alarm_lock:
+            if active:
+                self._active_cams.add(camera_name)
+            else:
+                self._active_cams.discard(camera_name)
+            any_on = bool(self._active_cams)
+            changed = any_on != self._gpio_on
+            self._gpio_on = any_on
+        if changed and self.gpio is not None:
             try:
-                self.gpio.trigger()
+                self.gpio.set_active(any_on)
             except Exception as e:
-                print("[GPIO] Falha ao disparar:", e)
+                print("[GPIO] Falha ao ajustar sirene:", e)
+
+    def notify_alert(self, camera_name, snapshot=None):
+        """Dispara as notificações (celular) — chamado 1x na borda de subida do alarme."""
         if self.notifier is not None:
             title = f"{self.notifier.title} [{camera_name}]"
             self.notifier.dispatch(title=title, snapshot=snapshot)
@@ -413,12 +481,17 @@ class AlertSink:
         if self.gpio is not None:
             try:
                 if self.gpio.check_clear_input():
-                    self.gpio.clear()
-                    print("[GPIO] LATCH limpo via pino de limpeza.")
+                    self.clear()
+                    print("[GPIO] Sirene silenciada via pino de limpeza.")
             except Exception:
                 pass
 
     def clear(self):
+        # silencia a sirene agora; se uma câmera ainda estiver em alarme, ela
+        # voltará a ligar no próximo frame (não dá pra silenciar perigo ativo).
+        with self._alarm_lock:
+            self._active_cams.clear()
+            self._gpio_on = False
         if self.gpio is not None:
             self.gpio.clear()
 

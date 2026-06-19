@@ -27,8 +27,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
 
 EDITABLE = {
-    "video": ["backend", "resize_width", "infer_every"],
-    "model": ["weights", "conf", "iou", "device"],
+    "video": ["backend", "resize_width", "infer_every", "stream_fps"],
+    "model": ["weights", "conf", "iou", "device", "imgsz"],
     "alarm": ["enabled_start", "dwell_seconds", "dwell_child_alone_seconds",
               "dwell_grace_seconds", "min_box_area", "cooldown_seconds"],
 }
@@ -64,7 +64,8 @@ def create_app(config_path):
     for cam in cams:
         engines[cam["id"]] = DetectionEngine(
             cfg, name=cam.get("name", cam["id"]), source=cam.get("source", 0),
-            roi_path=cam.get("roi_file", f"roi_{cam['id']}.yaml"), on_alert=sink.handle,
+            roi_path=cam.get("roi_file", f"roi_{cam['id']}.yaml"),
+            on_alert=sink.notify_alert, on_alarm=sink.set_alarm,
         )
 
     web = cfg.get("web", {}) or {}
@@ -174,7 +175,7 @@ def create_app(config_path):
             for k in keys:
                 if k in inc:
                     cur[section][k] = inc[k]
-        for whole in ("notify", "classify", "cameras", "product"):
+        for whole in ("notify", "classify", "cameras", "product", "motion"):
             if whole in new_cfg:
                 cur[whole] = new_cfg[whole]
         save_cfg(config_path, cur)

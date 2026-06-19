@@ -38,7 +38,7 @@ def main():
     engine = DetectionEngine(cfg, name=cam.get("name", "Câmera 1"),
                              source=cam.get("source", 0),
                              roi_path=cam.get("roi_file", "roi_pool.yaml"),
-                             on_alert=sink.handle)
+                             on_alert=sink.notify_alert, on_alarm=sink.set_alarm)
     engine.start()
 
     print("Teclas: A=armar/desarmar  C=limpar alerta  Q=sair")
