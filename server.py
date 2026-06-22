@@ -9,6 +9,7 @@ Uso:  python server.py --config config.yaml      (ou: make server)
 """
 
 import os
+import re
 import time
 import secrets
 import argparse
@@ -22,6 +23,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import StreamingResponse, FileResponse, Response
 
 from engine import DetectionEngine, AlertSink
+from discovery import list_local_cameras, discover_network
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
@@ -42,6 +44,19 @@ def load_cfg(path):
 def save_cfg(path, cfg):
     with open(path, "w") as f:
         yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
+
+
+def norm_source(src):
+    """Normaliza fontes locais p/ comparação: 0 e '/dev/video0' -> '/dev/video0'.
+
+    Fontes não-locais (rtsp://, arquivo) voltam como string crua."""
+    s = str(src).strip()
+    m = re.match(r"/dev/video(\d+)$", s)
+    if m:
+        return "/dev/video" + m.group(1)
+    if s.isdigit():
+        return "/dev/video" + s
+    return s
 
 
 def build_cameras(cfg):
@@ -120,6 +135,23 @@ def create_app(config_path):
     def list_cameras(_: str = Depends(auth)):
         return [{"id": cid, "name": e.name} for cid, e in engines.items()]
 
+    # ---------- descoberta de câmeras ----------
+    @app.get("/api/discover/local")
+    def discover_local(_: str = Depends(auth)):
+        """Câmeras locais (USB/CSI), marcando as que já estão configuradas/em uso."""
+        used = {norm_source(c.get("source")): c for c in cams}
+        found = list_local_cameras()
+        for f in found:
+            c = used.get(norm_source(f["source"]))
+            f["in_use_by"] = c.get("name", c.get("id")) if c else None
+            f["in_use_id"] = c.get("id") if c else None
+        return {"cameras": found}
+
+    @app.get("/api/discover/network")
+    def discover_net(timeout: float = 3.0, _: str = Depends(auth)):
+        """Câmeras IP na rede (ONVIF WS-Discovery + scan da porta RTSP 554)."""
+        return {"cameras": discover_network(timeout=max(0.5, min(timeout, 10.0)))}
+
     # ---------- vídeo ----------
     @app.get("/stream/{cam_id}")
     def stream(cam_id: str, _: str = Depends(auth)):
@@ -161,6 +193,17 @@ def create_app(config_path):
         sink.clear()
         return {"status": "ok"}
 
+    @app.post("/api/main_camera")
+    def set_main_camera(payload: dict = Body(...), _: str = Depends(auth)):
+        """Define qual câmera é a 'principal' (vídeo + ROI no painel) e persiste."""
+        cam_id = payload.get("cam_id")
+        if cam_id not in engines:
+            raise HTTPException(404, f"Câmera '{cam_id}' não existe")
+        cur = load_cfg(config_path)
+        cur.setdefault("product", {})["main_camera"] = cam_id
+        save_cfg(config_path, cur)
+        return {"status": "ok", "main_camera": cam_id}
+
     # ---------- configuração ----------
     @app.get("/api/config")
     def get_config(_: str = Depends(auth)):
@@ -175,9 +218,11 @@ def create_app(config_path):
             for k in keys:
                 if k in inc:
                     cur[section][k] = inc[k]
-        for whole in ("notify", "classify", "cameras", "product", "motion"):
+        for whole in ("notify", "classify", "cameras", "motion"):
             if whole in new_cfg:
                 cur[whole] = new_cfg[whole]
+        if "product" in new_cfg:  # merge p/ não apagar main_camera num save parcial
+            cur.setdefault("product", {}).update(new_cfg["product"] or {})
         save_cfg(config_path, cur)
         # aplica em tempo real ao que já existe; câmeras adicionadas/removidas pedem restart
         for e in engines.values():

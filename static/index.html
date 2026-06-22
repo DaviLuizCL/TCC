@@ -49,6 +49,14 @@
   .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:0 12px; }
   .chan, .cam { border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-top:10px; }
   .chan summary { cursor:pointer; font-weight:600; }
+  .found { border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-top:8px;
+           display:flex; align-items:center; gap:10px; cursor:pointer; }
+  .found:hover { border-color:var(--accent); background:#1b2230; }
+  .found .meta { flex:1; min-width:0; }
+  .found .nm { font-size:14px; }
+  .found .src { font-size:12px; color:var(--mut); word-break:break-all; }
+  .found .tag { font-size:11px; padding:2px 7px; border-radius:999px; background:#21262d; color:var(--mut); }
+  .found .tag.ok { background:var(--ok); color:#fff; } .found .tag.busy { background:var(--warn); color:#000; }
   .hint { font-size:12px; color:var(--mut); margin-top:6px; }
   .inline { display:flex; gap:8px; align-items:center; }
   .inline input { width:auto; }
@@ -74,6 +82,10 @@
 <main>
   <div class="card">
     <h2>Ao vivo</h2>
+    <div class="row" style="margin-bottom:10px">
+      <label style="margin:0">Câmera principal</label>
+      <select id="main-cam" style="width:auto"></select>
+    </div>
     <div class="tabs" id="tabs"></div>
     <img id="video" alt="stream">
     <button id="btn-arm" class="bigbtn off" style="margin-top:12px">—</button>
@@ -115,7 +127,12 @@
   <div class="card">
     <h2>Câmeras</h2>
     <div id="cams"></div>
-    <button id="cam-add" class="sm" style="margin-top:10px">+ câmera</button>
+    <div class="row" style="margin-top:10px">
+      <button id="cam-add" class="sm">+ câmera</button>
+      <button id="cam-find-local" class="sm">🔍 Buscar locais (USB)</button>
+      <button id="cam-find-net" class="sm">🌐 Buscar na rede (IP/RTSP)</button>
+    </div>
+    <div id="cam-found"></div>
     <p class="hint">Fonte: <code>0</code>/<code>/dev/video2</code> (webcam) ou <code>rtsp://user:senha@ip:554/...</code>.
       Limite do tier: <b id="cam-max">3</b>. Adicionar/remover câmera exige reiniciar o servidor.</p>
   </div>
@@ -161,14 +178,21 @@ async function api(path, opts){ const r=await fetch(path, opts);
   return r.headers.get("content-type")?.includes("json") ? r.json() : r; }
 const J = (path,body,method="POST") => api(path,{method,headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
 
-let CAMERAS=[], CUR=null, CFG={};
+let CAMERAS=[], CUR=null, MAIN=null, CFG={};
 
-// ---------- abas de câmera ----------
+// ---------- seleção de câmera (vídeo principal + ROI) ----------
 async function loadCameras(){
   CAMERAS = await api("/api/cameras");
-  CUR = CAMERAS.length ? CAMERAS[0].id : null;
-  renderTabs();
-  selectCam(CUR);
+  const saved=(CFG.product||{}).main_camera;
+  const def = CAMERAS.find(c=>c.id===saved) ? saved : (CAMERAS[0] && CAMERAS[0].id);
+  MAIN = def;
+  renderMainSelect();
+  setActive(def, false);   // na carga não re-persiste
+}
+function renderMainSelect(){
+  const sel=$("#main-cam"); sel.innerHTML="";
+  for(const c of CAMERAS) sel.appendChild(ce("option",{value:c.id,textContent:c.name}));
+  if(CUR) sel.value=CUR;
 }
 function renderTabs(){
   const box=$("#tabs"); box.innerHTML="";
@@ -176,9 +200,18 @@ function renderTabs(){
     const t=ce("div",{className:"tab"+(c.id===CUR?" active":"")});
     t.dataset.id=c.id;
     t.append(ce("span",{className:"dot",id:"dot-"+c.id}), document.createTextNode(c.name));
-    t.onclick=()=>{ CUR=c.id; renderTabs(); selectCam(c.id); };
+    t.onclick=()=>setActive(c.id);
     box.appendChild(t);
   }
+}
+// troca a câmera ativa (vídeo + ROI) e, por padrão, salva como principal
+function setActive(id, persist=true){
+  if(!id) return;
+  CUR=id;
+  renderTabs();
+  const sel=$("#main-cam"); if(sel) sel.value=id;
+  selectCam(id);
+  if(persist && id!==MAIN){ MAIN=id; J("/api/main_camera",{cam_id:id}).catch(()=>{}); }
 }
 function selectCam(id){
   if(!id) return;
@@ -187,6 +220,7 @@ function selectCam(id){
   $("#roi-cam-name").textContent = c? c.name : "—";
   loadSnapshot();
 }
+$("#main-cam").onchange=function(){ setActive(this.value); };
 
 // ---------- status ----------
 async function poll(){
@@ -294,6 +328,48 @@ function addCamRow(c={name:"",source:""}){
   $("#cams").appendChild(div);
 }
 $("#cam-add").onclick=()=>addCamRow();
+
+// ---------- descoberta de câmeras ----------
+function renderFound(cams, kind){
+  const box=$("#cam-found"); box.innerHTML="";
+  if(!cams.length){ box.innerHTML=`<p class="hint">Nenhuma câmera ${kind==="net"?"de rede":"local"} encontrada.</p>`; return; }
+  for(const c of cams){
+    const div=ce("div",{className:"found"});
+    const name=c.name || c.ip || c.source;
+    // estado: net | used (já configurada) | dead (não capturou) | ok (livre)
+    let tag, state="ok";
+    if(kind==="net"){ tag=c.onvif?`<span class="tag ok">ONVIF</span>`:`<span class="tag">RTSP :554</span>`; }
+    else if(c.in_use_by){ tag=`<span class="tag ok">em uso: ${c.in_use_by}</span>`; state="used"; }
+    else if(c.available){ tag=`<span class="tag ok">livre</span>`; }
+    else { tag=`<span class="tag busy">não capturou</span>`; state="dead"; }
+    if(state==="dead") div.style.opacity=.6;   // só a que não abriu fica apagada
+    div.innerHTML=`<div class="meta"><div class="nm">${name}</div><div class="src">${c.source}</div></div>${tag}`;
+    div.onclick=()=>{
+      if(state==="used"){            // já é uma câmera do sistema: seleciona em vez de duplicar
+        toast(`Essa é a sua câmera "${c.in_use_by}" — selecionei ela.`);
+        if(c.in_use_id) setActive(c.in_use_id);
+        return;
+      }
+      addCamRow({name: kind==="net"?("Câmera "+(c.ip||"")):name, source:c.source});
+      if(state==="dead") toast("Aviso: não consegui capturar dela agora (tampada/sem driver). Pode não funcionar.");
+      else toast("Câmera adicionada ao formulário — ajuste e use Salvar tudo");
+      if(kind==="net") toast("Troque USUARIO:SENHA na URL rtsp pela credencial da câmera");
+    };
+    box.appendChild(div);
+  }
+}
+async function discover(url, kind, btn){
+  const old=btn.textContent; btn.disabled=true; btn.textContent="buscando…";
+  try{ const r=await api(url); renderFound(r.cameras||[], kind); }
+  catch(e){ toast("Erro na busca: "+e.message); }
+  finally{ btn.disabled=false; btn.textContent=old; }
+}
+$("#cam-find-local").onclick=function(){ discover("/api/discover/local","local",this); };
+$("#cam-find-net").onclick=function(){
+  $("#cam-found").innerHTML=`<p class="hint">Varrendo a rede (ONVIF + porta 554)… pode levar alguns segundos.</p>`;
+  discover("/api/discover/network?timeout=3","net",this);
+};
+
 function readCameras(){
   return [...$("#cams").children].map((d,i)=>{
     const id=d.dataset.id||("cam"+(i+1));
@@ -350,7 +426,7 @@ async function loadConfig(){
 }
 $("#cfg-save").onclick = async ()=>{
   const payload = {
-    product:{ max_cameras: MAXCAM },
+    product:{ max_cameras: MAXCAM, main_camera: MAIN },
     cameras: readCameras(),
     video:{ backend:$("#c-backend").value, resize_width:+$("#c-resize").value, infer_every:+$("#c-infer").value },
     model:{ weights:$("#c-weights").value, device:$("#c-device").value, conf:+$("#c-conf").value },
