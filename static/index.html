@@ -323,7 +323,10 @@ function addCamRow(c={name:"",source:""}){
       <div><label>Fonte (webcam ou rtsp://)</label><input class="cam-src" value="${c.source??""}"></div>
     </div>`;
   const del=ce("button",{className:"sm",textContent:"remover câmera",style:"margin-top:8px"});
-  del.onclick=()=>div.remove(); div.appendChild(del);
+  del.onclick=()=>div.remove();
+  const main=ce("button",{className:"sm",textContent:"⭐ usar como principal",style:"margin-top:8px;margin-left:8px"});
+  main.onclick=()=>setRowAsMain(div);
+  div.append(del, main);
   div.dataset.id=c.id||""; div.dataset.roi=c.roi_file||"";
   $("#cams").appendChild(div);
 }
@@ -338,7 +341,8 @@ function renderFound(cams, kind){
     const name=c.name || c.ip || c.source;
     // estado: net | used (já configurada) | dead (não capturou) | ok (livre)
     let tag, state="ok";
-    if(kind==="net"){ tag=c.onvif?`<span class="tag ok">ONVIF</span>`:`<span class="tag">RTSP :554</span>`; }
+    if(kind==="net"){ tag=c.onvif?`<span class="tag ok">ONVIF</span>`:`<span class="tag">RTSP :554</span>`;
+                      if(c.needs_auth===false) tag+=`<span class="tag ok">pronta</span>`; }
     else if(c.in_use_by){ tag=`<span class="tag ok">em uso: ${c.in_use_by}</span>`; state="used"; }
     else if(c.available){ tag=`<span class="tag ok">livre</span>`; }
     else { tag=`<span class="tag busy">não capturou</span>`; state="dead"; }
@@ -352,8 +356,9 @@ function renderFound(cams, kind){
       }
       addCamRow({name: kind==="net"?("Câmera "+(c.ip||"")):name, source:c.source});
       if(state==="dead") toast("Aviso: não consegui capturar dela agora (tampada/sem driver). Pode não funcionar.");
+      else if(kind==="net" && c.needs_auth===false) toast("Câmera pronta! Clique em '⭐ usar como principal' na linha.");
       else toast("Câmera adicionada ao formulário — ajuste e use Salvar tudo");
-      if(kind==="net") toast("Troque USUARIO:SENHA na URL rtsp pela credencial da câmera");
+      if(kind==="net" && c.needs_auth!==false) toast("Troque USUARIO:SENHA na URL rtsp pela credencial da câmera");
     };
     box.appendChild(div);
   }
@@ -363,6 +368,27 @@ async function discover(url, kind, btn){
   try{ const r=await api(url); renderFound(r.cameras||[], kind); }
   catch(e){ toast("Erro na busca: "+e.message); }
   finally{ btn.disabled=false; btn.textContent=old; }
+}
+// define a câmera daquela linha do formulário como "câmera principal"
+async function setRowAsMain(div){
+  // garante um id único na linha (linhas novas vêm sem id)
+  let id=div.dataset.id;
+  if(!id){
+    const ids=new Set([...$("#cams").children].map(d=>d.dataset.id).filter(Boolean));
+    let n=1; id="cam"+n; while(ids.has(id)){ n++; id="cam"+n; }
+    div.dataset.id=id;
+    if(!div.dataset.roi) div.dataset.roi="roi_"+id+".yaml";
+  }
+  const name=div.querySelector(".cam-name").value||id;
+  try{
+    await J("/api/config", { cameras:readCameras(), product:{ max_cameras:MAXCAM, main_camera:id } });
+    MAIN=id;
+    CAMERAS = await api("/api/cameras");   // engine da câmera nova já subiu → lista atualizada
+    renderMainSelect();
+    if(CAMERAS.some(c=>c.id===id)) setActive(id, false);   // troca vídeo + abas, sem re-persistir
+    else renderTabs();
+    toast(`"${name}" definida como câmera principal.`);
+  }catch(e){ toast("Erro ao salvar: "+e.message); }
 }
 $("#cam-find-local").onclick=function(){ discover("/api/discover/local","local",this); };
 $("#cam-find-net").onclick=function(){

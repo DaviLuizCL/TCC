@@ -224,13 +224,29 @@ def create_app(config_path):
         if "product" in new_cfg:  # merge p/ não apagar main_camera num save parcial
             cur.setdefault("product", {}).update(new_cfg["product"] or {})
         save_cfg(config_path, cur)
-        # aplica em tempo real ao que já existe; câmeras adicionadas/removidas pedem restart
+        # reconcilia engines com a config: câmeras adicionadas sobem na hora (sem restart)
+        if "cameras" in new_cfg:
+            desired = {c["id"]: c for c in build_cameras(cur)}
+            for cid in list(engines.keys()):       # remove as que saíram
+                if cid not in desired:
+                    engines.pop(cid).stop()
+            for cid, c in desired.items():          # adiciona/recria as novas ou com fonte trocada
+                src, roi = c.get("source", 0), c.get("roi_file", f"roi_{cid}.yaml")
+                e = engines.get(cid)
+                if e and (str(e._source_override) != str(src) or e.roi_path != roi):
+                    e.stop(); e = None
+                if e is None:
+                    e = DetectionEngine(cur, name=c.get("name", cid), source=src, roi_path=roi,
+                                        on_alert=sink.notify_alert, on_alarm=sink.set_alarm)
+                    e.start()
+                    engines[cid] = e
+                else:
+                    e.name = e.status["name"] = c.get("name", cid)
+        # aplica em tempo real ao que já existe
         for e in engines.values():
             e.apply_config(cur)
         sink.reconfigure(cur)
-        restart = "cameras" in new_cfg and \
-            [c.get("id") for c in (new_cfg.get("cameras") or [])] != list(engines.keys())
-        return {"status": "ok", "restart_needed": restart}
+        return {"status": "ok", "restart_needed": False}
 
     # ---------- ROI (por câmera) ----------
     @app.get("/api/roi/{cam_id}")

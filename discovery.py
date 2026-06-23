@@ -178,7 +178,7 @@ def discover_onvif(timeout=3.0):
                 seen.add(ip)
                 xaddrs = re.findall(r"https?://[^\s<]+", data.decode(errors="replace"))
                 found.append({"ip": ip, "xaddr": xaddrs[0] if xaddrs else "",
-                              "source": f"rtsp://USUARIO:SENHA@{ip}:554/"})
+                              "source": f"rtsp://USUARIO:SENHA@{ip}:554/", "needs_auth": True})
         except OSError:
             pass
         finally:
@@ -192,6 +192,46 @@ def _port_open(ip, port, timeout):
             return True
     except OSError:
         return False
+
+
+# caminhos RTSP comuns — usados p/ descobrir a URL do stream sem o usuário digitar
+_RTSP_PATHS = [
+    "", "cam", "stream", "live", "live.sdp", "h264", "video", "ch0",
+    "media/video1", "11", "1/1",
+    "Streaming/Channels/101",                # Hikvision
+    "cam/realmonitor?channel=1&subtype=0",   # Dahua
+]
+
+
+def _rtsp_describe(ip, port, path, timeout):
+    """DESCRIBE RTSP. Devolve o código (200/401/4xx) ou None se não respondeu."""
+    url = f"rtsp://{ip}:{port}/{path}" if path else f"rtsp://{ip}:{port}"
+    try:
+        with socket.create_connection((ip, port), timeout=timeout) as s:
+            s.settimeout(timeout)
+            s.sendall((f"DESCRIBE {url} RTSP/1.0\r\nCSeq: 1\r\n"
+                       f"User-Agent: PoolGuard\r\nAccept: application/sdp\r\n\r\n").encode())
+            resp = s.recv(2048).decode(errors="replace")
+    except OSError:
+        return None
+    m = re.match(r"RTSP/1\.\d+ (\d+)", resp)
+    return int(m.group(1)) if m else None
+
+
+def probe_rtsp_url(ip, port=554, timeout=1.2):
+    """Sonda caminhos comuns e devolve (source, needs_auth) — URL pronta quando dá.
+
+    • caminho aberto (200) -> ('rtsp://ip:port/<path>', False)  pronto p/ usar
+    • pediu senha   (401)  -> ('rtsp://USUARIO:SENHA@ip:port/', True)
+    • desconhecido         -> ('rtsp://USUARIO:SENHA@ip:port/', True)
+    """
+    for path in _RTSP_PATHS:
+        code = _rtsp_describe(ip, port, path, timeout)
+        if code == 200:
+            return (f"rtsp://{ip}:{port}/{path}" if path else f"rtsp://{ip}:{port}/", False)
+        if code == 401:
+            break    # exige credencial: sem ela não dá p/ descobrir o caminho
+    return (f"rtsp://USUARIO:SENHA@{ip}:{port}/", True)
 
 
 def scan_rtsp_subnet(port=554, timeout=0.4, max_hosts=256):
@@ -213,7 +253,8 @@ def scan_rtsp_subnet(port=554, timeout=0.4, max_hosts=256):
     with ThreadPoolExecutor(max_workers=64) as ex:
         for ip, ok in zip(targets, ex.map(lambda h: _port_open(h, port, timeout), targets)):
             if ok:
-                hits.append({"ip": ip, "source": f"rtsp://USUARIO:SENHA@{ip}:{port}/"})
+                src, needs_auth = probe_rtsp_url(ip, port)
+                hits.append({"ip": ip, "source": src, "needs_auth": needs_auth})
     return hits
 
 
